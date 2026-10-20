@@ -2,7 +2,7 @@
  *
  * 8x8 monochrome bitmap font by Daniel Hepper (public domain), based on
  * Marcel Sondaar's public-domain IBM VGA fonts.  Each glyph is 8 bytes,
- * top row first; bit 7 is the leftmost pixel.
+ * top row first; bit 0 is the leftmost pixel.
  */
 
 const unsigned char font8x8[95][8] = {

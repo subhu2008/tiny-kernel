@@ -68,7 +68,7 @@ static void fb_glyph(unsigned char c, unsigned x, unsigned y)
     for (row = 0; row < 8; row++) {
         bits = glyph[row];
         for (col = 0; col < 8; col++)
-            if (bits & (0x80 >> col)) {          /* bit 7 is the leftmost pixel */
+            if (bits & (1 << col)) {               /* bit 0 is the leftmost pixel */
                 plot(x + col, y + 2 * row,     255, 255, 255);
                 plot(x + col, y + 2 * row + 1, 255, 255, 255);
             }
