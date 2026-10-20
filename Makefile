@@ -1,11 +1,13 @@
 # Makefile -- extremely tiny i386 kernel
 #
 # Usage:
-#   make              build in this directory
-#   make O=out        build into ./out (created if it does not exist)
-#   make run          build, then boot the kernel in QEMU
-#   make O=out run    same, but boot the copy built into ./out
-#   make clean        remove build output
+#   make                  build in this directory
+#   make O=out            build into ./out (created if it does not exist)
+#   make run              build, then boot the kernel in QEMU (with a display)
+#   make O=out run        same, but boot the copy built into ./out
+#   make run-nographic    boot headless; the kernel prints over serial too
+#                         (quit QEMU with Ctrl-A then X)
+#   make clean            remove build output
 #
 # The compiler is i386-tcc, matching the i386 target of this kernel.
 
@@ -25,11 +27,12 @@ CFLAGS  ?= -Wall -O2
 LDFLAGS ?= -nostdlib -static -Wl,-Ttext=$(KERN_LOADADDR)
 
 QEMU    ?= qemu-system-i386
+QEMUFLAGS ?=
 
 TARGET  := kernel.elf
 OBJS    := $(O)/boot.o $(O)/kernel.o
 
-.PHONY: all run clean
+.PHONY: all run run-nographic clean
 
 all: $(O)/$(TARGET)
 
@@ -51,7 +54,12 @@ $(O):
 	mkdir -p $@
 
 run: $(O)/$(TARGET)
-	$(QEMU) -kernel $(O)/$(TARGET)
+	$(QEMU) $(QEMUFLAGS) -kernel $(O)/$(TARGET)
+
+# Headless boot: the kernel mirrors its output to COM1, which -nographic
+# wires to stdio, so the text shows up right in the terminal.
+run-nographic: $(O)/$(TARGET)
+	$(QEMU) $(QEMUFLAGS) -nographic -kernel $(O)/$(TARGET)
 
 clean:
 ifeq ($(O),.)
