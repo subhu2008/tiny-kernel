@@ -2,7 +2,7 @@
 Tiny kernel compilable via i386-tcc targetting i386 arch
 
 # For tcc (Tiny C compiler)
-Compile from here: (Tiny C repo mirror)[https://github.com/Tiny-C-Compiler/tinycc-mirror-repository.git]
+Compile from here: [Tiny C compiler](https://github.com/Tiny-C-Compiler/tinycc-mirror-repository.git)
 
 # Compile (Debian based distros) 
 ``
