@@ -1,4 +1,8 @@
 /* kernel.c */
+#include "boot_info.h"
+
+void fb_init(const boot_info_t *bi);
+void fb_putchar(unsigned char c);
 
 /* ---------------- VGA text buffer (visible when QEMU has a display) ------- */
 #define VGA_ATTR 0x0F /* 0x0F = White text on Black background */
@@ -38,7 +42,8 @@ static void serial_putchar(char c)
     outb(COM1, (unsigned char)c);
 }
 
-/* Write the same character to both screens at once. */
+/* Write the same character to every active screen at once: VGA text,
+ * COM1 serial, and the GOP framebuffer when the UEFI stub provided one. */
 static void print(const char *str)
 {
     volatile char *video_memory = (volatile char *)0xB8000;
@@ -47,13 +52,18 @@ static void print(const char *str)
         *video_memory++ = *str;   /* Set character byte */
         *video_memory++ = VGA_ATTR; /* Set color byte (White on Black) */
         serial_putchar(*str);
+        fb_putchar((unsigned char)*str);
         str++;
     }
 }
 
-void kernel_main()
+void kernel_main(unsigned int magic, unsigned int info)
 {
     serial_init();
+    /* On the UEFI path %ebx carries a boot_info_t* with the GOP
+     * framebuffer; on the BIOS path there is none (VGA text instead). */
+    fb_init(magic == BOOT_MAGIC_UEFI ? (const boot_info_t *)info : (const boot_info_t *)0);
     print("Hello from your 32-bit TCC Kernel!");
     serial_putchar('\n'); /* finish the serial line */
+    fb_putchar('\n');
 }

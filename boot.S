@@ -18,7 +18,11 @@ _start:
     # Set up a stable 32-bit stack pointer
     mov $stack_top, %esp
 
-    # Jump straight to your C logic
+    # kernel_main(magic, info), multiboot style: the BIOS path passes the
+    # multiboot magic/info through, the UEFI path passes BOOT_MAGIC_UEFI
+    # and a boot_info_t* (see boot_info.h)
+    pushl %ebx
+    pushl %eax
     call kernel_main
 
 halt_loop:

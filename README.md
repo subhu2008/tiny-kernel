@@ -13,14 +13,14 @@ It boots two ways from the *same* `kernel.elf`:
 
 ## Output
 
-Every character goes to **two** places at once:
+Every character goes to every active screen at once:
 
-* the VGA text buffer at `0xB8000` (visible when QEMU has a display),
-* COM1 serial, 115200 8N1 (visible with `qemu -nographic`).
-
-Under UEFI, the firmware screen is a graphics framebuffer rather than VGA
-text, so there the EFI stub prints its banner via the UEFI console and the
-kernel's own line appears on serial.
+* the VGA text buffer at `0xB8000` (BIOS boot, visible when QEMU has a
+  display),
+* the GOP pixel framebuffer the UEFI stub hands over (UEFI boot: the
+  kernel clears the firmware screen and draws its text there itself with
+  an 8x8 font at 8x16 size),
+* COM1 serial, 115200 8N1 (always, visible with `qemu -nographic`).
 
 # For tcc (Tiny C compiler)
 Compile from here: [Tiny C compiler](https://github.com/Tiny-C-Compiler/tinycc-mirror-repository.git)
@@ -80,10 +80,13 @@ EFI application.
 
 ```
 boot.S               Multiboot v1 header + 32-bit entry, sets up a 16 KB
-                     stack and calls kernel_main
-kernel.c             kernel_main: writes to VGA text + COM1 serial
-efi/boot.c           UEFI stub: console + serial banner, ELF loader,
-                     ExitBootServices, hand-off to the kernel
+                     stack and calls kernel_main(magic, info)
+kernel.c             kernel_main: writes to VGA text + COM1 serial (+ fb)
+boot_info.h          hand-off struct shared by the UEFI stub and the kernel
+fb.c                 text renderer for the GOP framebuffer (UEFI path)
+font.c               public-domain 8x8 bitmap font (ASCII 32..126)
+efi/boot.c           UEFI stub: console + serial banner, GOP lookup, ELF
+                     loader, ExitBootServices, hand-off to the kernel
 efi/switch32.S       long mode -> 32-bit compatibility mode (flat GDT + lretq)
 efi/embed_kernel.S   .incbin's kernel.elf into the EFI app
 Makefile             builds all of the above; O= for out-of-tree builds
@@ -93,8 +96,10 @@ Makefile             builds all of the above; O= for out-of-tree builds
 
 * Original multiboot kernel (`boot.S`, first version of `kernel.c`):
   Subham Nayak
-* Build system, serial output, UEFI support and this README:
-  Big Pickle (AI coding assistant)
+* Build system, serial output, framebuffer renderer, UEFI support and this
+  README: Big Pickle (AI coding assistant)
+* 8x8 bitmap font (`font.c`): Daniel Hepper, based on Marcel Sondaar's
+  public-domain IBM VGA fonts
 
 ## License
 

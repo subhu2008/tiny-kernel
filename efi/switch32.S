@@ -1,9 +1,11 @@
 # efi/switch32.S -- long mode -> 32-bit protected mode (compatibility mode)
 #
-# void efi_switch_to_32(u32 entry);   /* MS x64 ABI: entry arrives in %rcx */
+# void efi_switch_to_32(u32 entry, u32 magic, u32 info);  /* MS x64 ABI:
+#                                             ecx=entry, edx=magic, r8d=info */
 #
 # The UEFI stub runs in 64-bit mode with identity-mapped page tables.  We
-# install a tiny flat GDT, load 32-bit segment descriptors, then use a far
+# install a tiny flat GDT, load 32-bit segment descriptors, put magic/info
+# into %eax/%ebx (the multiboot registers _start expects), then use a far
 # return (lretq) to drop into compatibility mode at the kernel's entry
 # point.  Paging stays on (OVMF identity-maps all RAM), which is fine:
 # the 32-bit kernel only touches identity addresses and port I/O.
@@ -21,9 +23,11 @@ efi_switch_to_32:
     movw %ax, %es
     movw %ax, %ss
 
-    movl %ecx, %eax          # kernel entry point (fits in 32 bits)
+    movl %edx, %eax          # magic: BOOT_MAGIC_UEFI instead of multiboot's
+    movl %r8d, %ebx          # info:  boot_info_t* for kernel_main
+
     pushq $0x08              # 32-bit flat code selector
-    pushq %rax               # entry point
+    pushq %rcx               # kernel entry point
     lretq                    # far return -> compatibility mode, CS=0x08, EIP=entry
 
     .align 8

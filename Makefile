@@ -34,7 +34,10 @@ QEMU    ?= qemu-system-i386
 QEMUFLAGS ?=
 
 TARGET  := kernel.elf
-OBJS    := $(O)/boot.o $(O)/kernel.o
+OBJS    := $(O)/boot.o $(O)/kernel.o $(O)/fb.o $(O)/font.o
+
+# tcc has no usable dep generation, so list the shared-header users by hand
+$(O)/kernel.o $(O)/fb.o: boot_info.h
 
 .PHONY: all run run-nographic clean
 
@@ -86,7 +89,7 @@ QEMU64 ?= qemu-system-x86_64
 
 efi: $(EFIAPP)
 
-$(EFI_DIR)/boot.o: efi/boot.c | $(O)
+$(EFI_DIR)/boot.o: efi/boot.c boot_info.h | $(O)
 	mkdir -p $(EFI_DIR)
 	$(EFI_CC) -c $< -o $@
 

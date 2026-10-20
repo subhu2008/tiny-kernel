@@ -6,11 +6,15 @@
  *      graphical firmware console and `qemu -nographic` show something,
  *   2. loads the embedded multiboot kernel.elf at its link address (1 MiB),
  *   3. exits boot services, copies the kernel segments into place and
- *      jumps to the kernel's 32-bit entry point (via switch32.S).
+ *      jumps to the kernel's 32-bit entry point (via switch32.S), passing
+ *      the GOP framebuffer in a boot_info_t so the kernel can draw on it
+ *      (the firmware console disappears with ExitBootServices).
  *
  * No UEFI headers are used; only the handful of table layouts we need are
  * spelled out below (offsets are for x86-64).
  */
+
+#include "../boot_info.h"
 
 typedef unsigned char u8;
 typedef unsigned short u16;
@@ -54,6 +58,14 @@ static void serial_puts(const char *s)
     }
 }
 
+static void serial_puthex(u64 v)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    serial_puts("0x");
+    for (int i = 60; i >= 0; i -= 4)
+        serial_puts((char[]){ hex[(v >> i) & 0xF], 0 });
+}
+
 /* ---- UEFI console (simple text output protocol) ---- */
 typedef struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
 struct EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
@@ -90,7 +102,7 @@ typedef struct {
     u64 Attribute;
 } EFI_MEMORY_DESCRIPTOR;
 
-/* Only up to ExitBootServices is used, so the table stops there. */
+/* Only the entries up to (and including) LocateProtocol are used. */
 struct EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
     void *RaiseTPL; void *RestoreTPL;
@@ -107,6 +119,11 @@ struct EFI_BOOT_SERVICES {
     void *LocateHandle; void *LocateDevicePath; void *InstallConfigurationTable;
     void *LoadImage; void *StartImage; void *Exit; void *UnloadImage;
     EFI_STATUS (*ExitBootServices)(EFI_HANDLE ImageHandle, u64 MapKey);
+    void *GetNextMonotonicCount; void *Stall; void *SetWatchdogTimer;
+    void *ConnectController; void *DisconnectController;
+    void *OpenProtocol; void *CloseProtocol; void *OpenProtocolInformation;
+    void *ProtocolsPerHandle; void *LocateHandleBuffer;
+    EFI_STATUS (*LocateProtocol)(void *Protocol, void *Registration, void **Interface);
 };
 
 /* loaded-image protocol: gives us where this stub itself lives */
@@ -126,14 +143,51 @@ typedef struct {
 static const EFI_GUID guid_loaded_image =
     { 0x5b1b31a1, 0x9562, 0x11d2, { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
 
+/* ---- GOP (graphics output protocol): where the kernel may draw ---- */
+typedef struct {
+    u32 RedMask, GreenMask, BlueMask, ReservedMask;
+} EFI_PIXEL_BITMASK;
+
+typedef struct {
+    u32 Version;
+    u32 HorizontalResolution;
+    u32 VerticalResolution;
+    u32 PixelFormat; /* 0 BGRX, 1 RGBX, 2 bitmask, 3 BLT-only */
+    EFI_PIXEL_BITMASK PixelInformation;
+    u32 PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFO;
+
+typedef struct {
+    u32 MaxMode;
+    u32 Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFO *Info;
+    u32 SizeOfInfo;
+    u64 FrameBufferBase;
+    u64 FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    void *QueryMode; void *SetMode; void *Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+};
+
+static const EFI_GUID guid_gop =
+    { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };
+
+/* Framebuffer handed to the kernel via %ebx; file scope (not a stack
+ * local) so its address is stable and unambiguous in the hand-off. */
+static boot_info_t bi;
+
 /* ---- embedded kernel (efi/embed_kernel.S) ---- */
 extern const u8 kstart[], kend[];
 
 #define KERNEL_PHYS 0x100000
 #define KERNEL_TAIL 0x8000 /* slack for .bss (16 KiB kernel stack) */
 
-/* the 32-bit trampoline, efi/switch32.S */
-void efi_switch_to_32(u32 entry);
+/* the 32-bit trampoline, efi/switch32.S: enters compatibility mode with
+ * %eax/%ebx set like a multiboot hand-off (magic, info) */
+void efi_switch_to_32(u32 entry, u32 magic, u32 info);
 
 static void fail(const char *msg)
 {
@@ -190,6 +244,44 @@ int efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
 
     struct EFI_BOOT_SERVICES *bs = st->BootServices;
 
+    /* Find the graphics framebuffer so the kernel can draw on it (the
+     * firmware console is gone once boot services exit).  `bi` is file
+     * scope so its address survives unchanged into the hand-off. */
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    bi.fb_addr = bi.fb_pitch = bi.fb_width = bi.fb_height = bi.fb_format = 0;
+    if (EFI_ERROR(bs->LocateProtocol((void *)&guid_gop, 0, (void **)&gop))) {
+        serial_puts("UEFI stub: no GOP protocol\n");
+    } else if (!gop->Mode || !gop->Mode->Info) {
+        serial_puts("UEFI stub: GOP has no mode info\n");
+    } else if (gop->Mode->FrameBufferBase > 0xFFFFFFFFULL) {
+        serial_puts("UEFI stub: GOP framebuffer above 4 GiB: ");
+        serial_puthex(gop->Mode->FrameBufferBase);
+        serial_puts("\n");
+    } else {
+        EFI_GRAPHICS_OUTPUT_MODE_INFO *mi = gop->Mode->Info;
+        serial_puts("UEFI stub: GOP framebuffer ");
+        serial_puthex(gop->Mode->FrameBufferBase);
+        serial_puts(", ");
+        serial_puthex(mi->HorizontalResolution);
+        serial_puts("x");
+        serial_puthex(mi->VerticalResolution);
+        serial_puts(", format ");
+        serial_puthex(mi->PixelFormat);
+        serial_puts("\n");
+        if (mi->PixelFormat == 3) { /* BLT-only: no linear framebuffer */
+            serial_puts("UEFI stub: ...but BLT-only, no linear access\n");
+        } else {
+            bi.fb_addr   = (u32)gop->Mode->FrameBufferBase;
+            bi.fb_pitch  = mi->PixelsPerScanLine * 4;
+            bi.fb_width  = mi->HorizontalResolution;
+            bi.fb_height = mi->VerticalResolution;
+            if (mi->PixelFormat == 1)                    bi.fb_format = 1; /* RGBX */
+            else if (mi->PixelFormat == 0)               bi.fb_format = 0; /* BGRX */
+            else /* bitmask: check where the red channel sits */
+                bi.fb_format = (mi->PixelInformation.RedMask & 0xFF) ? 1 : 0;
+        }
+    }
+
     /* Make sure we may stomp the kernel's load area once boot services are
      * over: it must not overlap runtime/firmware-reserved memory, nor this
      * stub's own image. */
@@ -236,7 +328,7 @@ int efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     u32 entry = load_kernel(kstart, kend - kstart);
 
     serial_puts("UEFI stub: jumping to 32-bit kernel entry\n");
-    efi_switch_to_32(entry);
+    efi_switch_to_32(entry, BOOT_MAGIC_UEFI, (u32)(u64)&bi);
 
     fail("returned from kernel entry?!"); /* not reached */
     return 0;
