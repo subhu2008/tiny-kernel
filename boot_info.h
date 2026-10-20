@@ -16,6 +16,11 @@ typedef struct {
     unsigned int fb_width; /* pixels */
     unsigned int fb_height;/* pixels */
     unsigned int fb_format;/* 0 = BGRX, 1 = RGBX (8-bit channels) */
+    unsigned int acpi_rsdp; /* physical address of the ACPI RSDP published by
+                             * the firmware, 0 if none (the UEFI stub looks it
+                             * up in the configuration table; on the BIOS path
+                             * there is no hand-off, so the kernel scans for
+                             * the RSDP itself) */
 } boot_info_t;
 
 #endif

@@ -3,10 +3,12 @@
 # Usage:
 #   make                  build in this directory
 #   make O=out            build into ./out (created if it does not exist)
-#   make run              build, then boot the kernel in QEMU (with a display)
+#   make run              build, then boot the kernel in QEMU (with a display);
+#                         the kernel powers off when it is done, so QEMU exits
 #   make O=out run        same, but boot the copy built into ./out
-#   make run-nographic    boot headless; the kernel prints over serial too
-#                         (quit QEMU with Ctrl-A then X)
+#   make run-nographic    boot headless; the kernel prints over serial too,
+#                         then powers the machine off after a couple of
+#                         seconds (QEMU exits on its own)
 #   make efi              also build the UEFI app: <O>/esp/EFI/BOOT/BOOTX64.EFI
 #                         (needs clang + lld-link; embeds the kernel above)
 #   make run-uefi         boot the UEFI build in QEMU/OVMF (add QEMUFLAGS=-nographic
@@ -34,14 +36,14 @@ QEMU    ?= qemu-system-i386
 QEMUFLAGS ?=
 
 TARGET  := kernel.elf
-OBJS    := $(O)/boot.o $(O)/kernel.o $(O)/fb.o $(O)/font.o
-
-# tcc has no usable dep generation, so list the shared-header users by hand
-$(O)/kernel.o $(O)/fb.o: boot_info.h
+OBJS    := $(O)/boot.o $(O)/kernel.o $(O)/shutdown.o $(O)/fb.o $(O)/font.o
 
 .PHONY: all run run-nographic clean
 
 all: $(O)/$(TARGET)
+
+# tcc has no usable dep generation, so list the shared-header users by hand
+$(O)/kernel.o $(O)/fb.o $(O)/shutdown.o: boot_info.h
 
 # Link
 $(O)/$(TARGET): $(OBJS)
@@ -60,13 +62,15 @@ $(O)/%.o: %.c | $(O)
 $(O):
 	mkdir -p $@
 
+# -no-reboot: if the ACPI shutdown path fails and the kernel falls back to
+# pulsing the reset line, end the session instead of rebooting into it.
 run: $(O)/$(TARGET)
-	$(QEMU) $(QEMUFLAGS) -kernel $(O)/$(TARGET)
+	$(QEMU) $(QEMUFLAGS) -no-reboot -kernel $(O)/$(TARGET)
 
 # Headless boot: the kernel mirrors its output to COM1, which -nographic
 # wires to stdio, so the text shows up right in the terminal.
 run-nographic: $(O)/$(TARGET)
-	$(QEMU) $(QEMUFLAGS) -nographic -kernel $(O)/$(TARGET)
+	$(QEMU) $(QEMUFLAGS) -no-reboot -nographic -kernel $(O)/$(TARGET)
 
 # ------------------------- UEFI (x86-64) -------------------------------
 # A freestanding PE32+ EFI application that embeds kernel.elf, loads it at
@@ -110,7 +114,7 @@ $(EFIAPP): $(EFI_OBJS)
 # Boots the ESP directory straight from the host via QEMU's vvfat driver;
 # OVMF finds \EFI\BOOT\BOOTX64.EFI on it like on a real FAT ESP.
 run-uefi: $(EFIAPP)
-	$(QEMU64) $(QEMUFLAGS) -bios $(OVMF) -drive format=raw,file=fat:rw:$(ESPDIR)
+	$(QEMU64) $(QEMUFLAGS) -no-reboot -bios $(OVMF) -drive format=raw,file=fat:rw:$(ESPDIR)
 
 clean:
 ifeq ($(O),.)
